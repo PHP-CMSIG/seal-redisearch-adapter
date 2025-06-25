@@ -39,6 +39,21 @@ final class RediSearchSearcher implements SearcherInterface
         );
     }
 
+    public function count(Index $index): int
+    {
+        /** @var array<mixed>|false $result */
+        $result = $this->client->rawCommand('FT.INFO', $index->name);
+
+        if (false === $result) {
+            throw $this->createRedisLastErrorException();
+        }
+
+        $count = $result[9] ?? 0;
+        \assert(\is_int($count), 'Expected count to be an integer, got: ' . \gettype($count));
+
+        return $count;
+    }
+
     public function search(Search $search): Result
     {
         if (
