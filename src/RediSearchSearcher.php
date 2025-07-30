@@ -18,6 +18,8 @@ use CmsIg\Seal\Marshaller\Marshaller;
 use CmsIg\Seal\Schema\Field;
 use CmsIg\Seal\Schema\Index;
 use CmsIg\Seal\Search\Condition;
+use CmsIg\Seal\Search\Facet\CountFacet;
+use CmsIg\Seal\Search\Facet\MinMaxFacet;
 use CmsIg\Seal\Search\Result;
 use CmsIg\Seal\Search\Search;
 
@@ -199,6 +201,7 @@ final class RediSearchSearcher implements SearcherInterface
         return new Result(
             $this->hitsToDocuments($search->index, $documents),
             $total,
+            $this->addFacets($search, $query, $parameters),
         );
     }
 
@@ -308,5 +311,98 @@ final class RediSearchSearcher implements SearcherInterface
         }
 
         return \implode($conjunctive ? ' ' : ' | ', $filters);
+    }
+
+    /**
+     * @param array<string, string> $parameters
+     *
+     * @return array<string, mixed> $facets
+     */
+    private function addFacets(Search $search, string $query, array $parameters): array
+    {
+        $formatted = [];
+
+        foreach ($search->facets as $facet) {
+            $arguments = [];
+
+            if ([] !== $parameters) {
+                $arguments[] = 'PARAMS';
+                $arguments[] = \count($parameters) * 2;
+                foreach ($parameters as $key => $value) {
+                    $arguments[] = $key;
+                    $arguments[] = $value;
+                }
+            }
+
+            if ($facet instanceof MinMaxFacet) {
+                $arguments = \array_merge($arguments, [
+                    'GROUPBY', '0',
+                    'REDUCE', 'MIN', '1', '@' . $this->getFilterField($search->index, $facet->field), 'AS', 'min_' . $this->getFilterField($search->index, $facet->field),
+                    'REDUCE', 'MAX', '1', '@' . $this->getFilterField($search->index, $facet->field), 'AS', 'max_' . $this->getFilterField($search->index, $facet->field),
+                ]);
+
+                $arguments[] = 'DIALECT';
+                $arguments[] = '2';
+
+                /** @var mixed[]|false $result */
+                $result = $this->client->rawCommand('FT.AGGREGATE', $search->index->name, $query, ...$arguments);
+
+                if (isset($result[1]) && \is_array($result[1])) {
+                    $formatted[$facet->field] = [
+                        'min' => (float) $result[1][1],
+                        'max' => (float) $result[1][3],
+                    ];
+                }
+            }
+
+            if ($facet instanceof CountFacet) {
+                $field = $search->index->getFieldByPath($facet->field);
+
+                if ($field->multiple) {
+                    throw new \RuntimeException('Facets on multiple fields are not supported by RediSearch: https://github.com/PHP-CMSIG/search/issues/583');
+                }
+
+                $arguments = \array_merge($arguments, [
+                    'GROUPBY', '1', '@' . $this->getFilterField($search->index, $facet->field),
+                    'REDUCE', 'COUNT', '0', 'AS', 'count',
+                ]);
+
+                $arguments[] = 'DIALECT';
+                $arguments[] = '2';
+
+                /** @var mixed[]|false $result */
+                $result = $this->client->rawCommand('FT.AGGREGATE', $search->index->name, $query, ...$arguments);
+
+                if (false === $result) {
+                    continue;
+                }
+
+                /** @var int $total */
+                $total = $result[0];
+
+                for ($i = 1; $i <= $total; ++$i) {
+                    if (isset($result[$i][1]) && isset($result[$i][3])) {
+                        $value = (string) $result[$i][1];
+                        $count = (int) $result[$i][3];
+
+                        if ($field instanceof Field\BooleanField) {
+                            $value = match ($value) {
+                                '0' => 'false',
+                                '1' => 'true',
+                                default => '',
+                            };
+                        }
+
+                        if ('' === $value) {
+                            continue;
+                        }
+
+                        $formatted[$facet->field]['count'][$value] = $count;
+                    }
+                }
+            }
+        }
+
+        return $formatted;
     }
 }
