@@ -88,7 +88,7 @@ final class RediSearchSearcher implements SearcherInterface
         $arguments = [
             'GROUPBY', 1, $distinctField,
             'REDUCE', 'FIRST_VALUE', '1', $identifierField, 'AS', 'documentId',
-            'DIALECT', '3',
+            'DIALECT', '2',
         ];
 
         /** @var array<mixed>|false $result */
