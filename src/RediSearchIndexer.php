@@ -29,7 +29,7 @@ final class RediSearchIndexer implements IndexerInterface
     ) {
         $this->marshaller = new Marshaller(
             dateFormat: 'U',
-            addRawFilterTextField: true,
+            addRawFilterTextField: true, // remove in next bc release
             geoPointFieldConfig: [
                 'latitude' => 1,
                 'longitude' => 0,
